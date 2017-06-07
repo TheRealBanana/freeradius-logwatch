@@ -1,10 +1,15 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 import sys
 import re
 import os
 
-logwatch_debug = os.getenv("LOGWATCH_DEBUG")
-logwatch_level = os.getenv("LOGWATCH_DETAIL_LEVEL")
+#ADJUST THESE NUMBERS BELOW TO YOUR NEEDS
+# The levels correspond to LOGWATCH_DETAIL_LEVEL levels
+ERROR_LINE_THRESHOLD = 1
+WARNING_LINE_THRESHOLD = 5
+INFO_LINE_THRESHOLD = 10
+
+logwatch_level = int(os.getenv("LOGWATCH_DETAIL_LEVEL"))
 
 #Stat tracker
 stats = {}
@@ -15,25 +20,15 @@ stats["loginOK"] = {}
 stats["loginFail"] = {}
 stats["infoLines"] = []
 stats["errorLines"] = []
+stats["warningLines"] = []
 
 #Setting up the regular expressions
-#These expressions are a bit much at first glance but after you take out the space-matching escapes and the control characters that affect groupings and its pretty simple.
-#I've included example log lines with each expressions to hopefully help give a better understanding of whats being matched.
-
 #date, type, and data
-#This is an error line but it doesnt matter, this is a pretty liberal expression that takes anything of the form 'date type data' if everything matches
-#Ex: Wed Dec  3 23:18:31 2014 : Error: Discarding conflicting packet from client MY_WAP port 36612 - ID: 4 due to recent request 6622
-line_rgx = re.compile("(?P<date>.*? (?:[0-9]{2}:[0-9]{2}:[0-9]{2}) 20[0-9]{2})\s+:\s+(?P<type>(?:Info|Auth|Error)):\s+(?P<data>.*)")
-
+line_rgx = re.compile("(?P<date>.*? (?:[0-9]{2}:[0-9]{2}:[0-9]{2}) 20[0-9]{2})\s+:\s+(?P<type>(?:Info|Auth|Error|Warning)):(?:\s+\([0-9]{1,6}\))?\s+(?P<data>.*)")
 #username, WAPid, and userMAC
-#Ex: Login OK: [username] (from client MY_WAP port 61 cli 00aa11bb22dd)
 auth_success = re.compile("Login OK:\s+\[(?P<username>.*?)\]\s+\(from client (?P<WAPid>.*?)\s+port\s+[0-9]{0,5}\s+cli\s+(?P<userMAC>[a-zA-Z0-9]{12})")
-
 #username, authInfo, WAPid, tls, and userMAC
-#This expression can match two different fail lines so I've included them both. One is a failure of the outer tunnel and one is the failure of the inner tunnel (I think)
-#Ex1: Login incorrect: [USERNAME/<no User-Password attribute>] (from client MY_WAP port 0 via TLS tunnel)
-#Ex2: Login incorrect: [USERNAME/<via Auth-Type = EAP>] (from client MY_WAP port 62 cli 00aa11bb22cc)
-auth_fail = re.compile("Login incorrect:\s+\[(?P<username>.*?)/(?P<authInfo>.*?)\]\s+\(from client\s+(?P<WAPid>.*?)\s+port [0-9]{0,5} (?:via (?P<tls>TLS tunnel)|cli (?P<userMAC>[a-zA-Z0-9]{12}))")
+auth_fail = re.compile("Login incorrect:?(?:\s+\(.*?\):)?\s+\[(?P<username>.*?)/(?P<authInfo>.*?)\]\s+\(from client\s+(?P<WAPid>.*?)\s+port [0-9]{0,5} (?:via (?P<tls>TLS tunnel)|cli (?P<userMAC>[a-zA-Z0-9]{12}))")
 
 #easier than putting spaces in by hand, and cleaner looking too
 s1 = "    "
@@ -56,9 +51,10 @@ def check_line(line):
     if line_match is not None:
         #If we encounter an Info or Error line we just want to save the entire line for viewing since those are usually important.
         #We can adjust what is shown by logwatch verbose level as well, although for now it will always print everything.
-        #In the future, only level 10 will print everything. Other levels will print just print the errors and auths, lowest few levels will only print errors
+        #In the future, only level 10 will print everything. Other levels will print just print the errors
         if line_match.group("type") == "Info": stats["infoLines"].append(line)
         elif line_match.group("type") == "Error": stats["errorLines"].append(line)
+        elif line_match.group("type") == "Warning": stats["warningLines"].append(line)
         #Now onto the Auth section.
         elif line_match.group("type") == "Auth":
             #Here we check if its a good or failed auth
@@ -116,7 +112,6 @@ def print_infos():
             gauth_usercount[wapid][usernm] = usr_device_count
             gauth_wapcount[wapid] += usr_device_count
     
-    #We repeat the same for failed auths
     bauth_usercount = {}
     bauth_wapcount = {}
     for wapid in stats["loginFail"]:
@@ -163,20 +158,30 @@ def print_infos():
         print ""
     print "\n"
     
-    #Print out any error lines
-    if len(stats["errorLines"]) > 0:
-        print "Errors: "
-        for line in stats["errorLines"]:
-            print "%s%s" % (s1, line)
-        print "\n"
-        
-    #Print out any info lines
-    if len(stats["infoLines"]) > 0:
-        print "Info: "
-        for line in stats["infoLines"]:
-            print "%s%s" % (s1, line)
+    if logwatch_level >= ERROR_LINE_THRESHOLD:
+        #Print out any error lines
+        if len(stats["errorLines"]) > 0:
+            print "Errors: "
+            for line in stats["errorLines"]:
+                print "%s%s" % (s1, line)
+            print "\n"
+    
+    if logwatch_level >= WARNING_LINE_THRESHOLD:
+        #Print out any warning lines
+        if len(stats["warningLines"]) > 0:
+            print "Warnings: "
+            for line in stats["warningLines"]:
+                print "%s%s" % (s1, line)
+            print "\n"
+
+    if logwatch_level >= INFO_LINE_THRESHOLD:
+        #Print out any info lines
+        if len(stats["infoLines"]) > 0:
+            print "Info: "
+            for line in stats["infoLines"]:
+                print "%s%s" % (s1, line)
             
-        
+    
 
 if __name__ == '__main__':
     #Take stdin one line at a time
@@ -185,3 +190,4 @@ if __name__ == '__main__':
 
     #And now print it out
     print_infos()
+
